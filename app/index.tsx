@@ -164,7 +164,7 @@ export default function LoginScreen() {
               <View style={styles.logoContainer}>
                 <Ionicons name="storefront" size={50} color="#fff" />
               </View>
-              <Text style={styles.brandName}>ShopEase</Text>
+              <Text style={styles.brandName}>LAKESMART</Text>
               <Text style={styles.tagline}>Your premium shopping destination</Text>
             </View>
 

@@ -13,6 +13,7 @@ import {
   TextInput,
   ScrollView,
   Dimensions,
+  Linking,
 } from 'react-native';
 import { 
   collection, 
@@ -28,15 +29,18 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, db } from '../firebase'; // Adjust path as needed
-
+import { router } from 'expo-router';
 const { width } = Dimensions.get('window');
 
 // Types
 interface DeliveryAddress {
   city: string;
   pincode: string;
-  state: string;
-  street: string;
+  state?: string;
+  street?: string;
+  formatted?: string;
+  landmark?: string;
+  area?: string;
 }
 
 interface OrderItem {
@@ -171,23 +175,36 @@ const ShopkeeperDashboard: React.FC = () => {
               if (customerDoc.exists()) {
                 const customerData = customerDoc.data();
                 customerName = customerData.name || customerData.firstName || customerData.displayName || 'Unknown Customer';
-                customerPhone = customerData.phone || '';
+                // Fetch phone number properly
+                customerPhone = customerData.phone || customerData.phoneNumber || customerData.mobile || '';
               }
             }
           } catch (error) {
             console.error('Error fetching customer data:', error);
           }
+let deliveryAddress = null;
 
-          // Parse delivery address properly
-          let deliveryAddress = null;
-          if (data.deliveryAddress) {
-            if (Array.isArray(data.deliveryAddress) && data.deliveryAddress.length > 0) {
-              deliveryAddress = data.deliveryAddress[0];
-            } else if (typeof data.deliveryAddress === 'object') {
-              deliveryAddress = data.deliveryAddress;
-            }
-          }
-          
+const addressSource = data.address;
+
+if (addressSource && typeof addressSource === 'object') {
+  const addressData = Array.isArray(addressSource) && addressSource.length > 0
+    ? addressSource[0]
+    : addressSource;
+
+  if (addressData && typeof addressData === 'object') {
+    deliveryAddress = {
+      city: addressData.city || '',
+      pincode: addressData.pincode || '',
+      state: addressData.state || '',
+      street: addressData.street || '',
+      formatted: addressData.formatted || '',
+      landmark: addressData.landmark || '',
+      area: addressData.area || ''
+    };
+  }
+}
+
+
           // Filter items to only include this shop's items
           const shopItems = data.items?.filter((item: OrderItem) => item.shopId === shopOwnerId) || [];
           
@@ -201,12 +218,7 @@ const ShopkeeperDashboard: React.FC = () => {
             cancelledAt: data.cancelledAt,
             createdAt: data.createdAt,
             customerNotes: data.customerNotes || '',
-            deliveryAddress: deliveryAddress ? {
-              city: deliveryAddress.city || '',
-              pincode: deliveryAddress.pincode || '',
-              state: deliveryAddress.state || '',
-              street: deliveryAddress.street || ''
-            } : undefined,
+            deliveryAddress: deliveryAddress,
             deliveryFee: Number(data.deliveryFee) || 0,
             items: shopItems, // Only this shop's items
             orderId: data.orderId || '',
@@ -252,6 +264,7 @@ const ShopkeeperDashboard: React.FC = () => {
         order.orderId.toLowerCase().includes(query) ||
         order.customerName?.toLowerCase().includes(query) ||
         order.userEmail.toLowerCase().includes(query) ||
+        order.customerPhone.toLowerCase().includes(query) ||
         order.items.some(item => item.name.toLowerCase().includes(query))
       );
     }
@@ -310,6 +323,10 @@ const ShopkeeperDashboard: React.FC = () => {
       Alert.alert('Error', 'Failed to update order status. Please try again.');
     }
   };
+
+ const navigateToAddPage = () => {
+  router.push('/add'); // Or whatever your route is
+};
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -375,6 +392,26 @@ const ShopkeeperDashboard: React.FC = () => {
     return ['placed', 'confirmed'].includes(order.status);
   };
 
+  const formatDeliveryAddress = (address: DeliveryAddress | undefined) => {
+    if (!address) return 'Delivery address not available';
+    
+    // Use formatted address if available
+    if (address.formatted) {
+      return address.formatted;
+    }
+    
+    // Build address from components
+    const parts = [];
+    if (address.street) parts.push(address.street);
+    if (address.area) parts.push(address.area);
+    if (address.landmark) parts.push(`Near ${address.landmark}`);
+    if (address.city) parts.push(address.city);
+    if (address.state) parts.push(address.state);
+    if (address.pincode) parts.push(address.pincode);
+    
+    return parts.length > 0 ? parts.join(', ') : 'Address details not available';
+  };
+
   const renderStatusFilter = () => (
     <ScrollView 
       horizontal 
@@ -424,12 +461,34 @@ const ShopkeeperDashboard: React.FC = () => {
       onPress={() => {
         setSelectedOrder(item);
         setModalVisible(true);
-      }}
-    >
+            }}
+          >
+            <TouchableOpacity
+        style={styles.shareButton}
+        onPress={() => {
+            const message = `Order Details:\n\nOrder ID: ${item.orderId}\nCustomer: ${item.customerName}\nPhone: ${item.customerPhone}\nAddress: ${formatDeliveryAddress(item.deliveryAddress)}\n\nItems:\n${item.items
+            .map(
+              (product) =>
+            `- ${product.name} (₹${product.price} x ${product.quantity})`
+            )
+            .join('\n')}\n\nTotal: ₹${item.total}`;
+
+           
+          const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+          Linking.openURL(url).catch((err) =>
+            console.error('Error opening WhatsApp:', err)
+          );
+        }}
+            >
+        <Text style={styles.shareButtonText}>Share</Text>
+            </TouchableOpacity>
       <View style={styles.orderHeader}>
         <View>
           <Text style={styles.orderId}>#{item.orderId}</Text>
           <Text style={styles.customerName}>{item.customerName}</Text>
+          {item.customerPhone && (
+            <Text style={styles.customerPhone}>📞 {item.customerPhone}</Text>
+          )}
         </View>
         <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) }]}>
           <Text style={styles.statusText}>{item.status.replace('_', ' ').toUpperCase()}</Text>
@@ -437,6 +496,16 @@ const ShopkeeperDashboard: React.FC = () => {
       </View>
 
       <Text style={styles.orderDate}>{formatDate(item.createdAt)}</Text>
+
+      {/* Delivery Address Preview */}
+      {item.deliveryAddress && (
+        <View style={styles.addressPreview}>
+          <Text style={styles.addressIcon}>📍</Text>
+          <Text style={styles.addressText} numberOfLines={2}>
+            {formatDeliveryAddress(item.deliveryAddress)}
+          </Text>
+        </View>
+      )}
 
       <View style={styles.itemsPreview}>
         {item.items && item.items.length > 0 ? (
@@ -510,6 +579,15 @@ const ShopkeeperDashboard: React.FC = () => {
     </TouchableOpacity>
   );
 
+  const renderAddButton = () => (
+    <TouchableOpacity 
+      style={styles.addButton}
+      onPress={navigateToAddPage}
+    >
+      <Text style={styles.addButtonText}>+ Add Product</Text>
+    </TouchableOpacity>
+  );
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -531,8 +609,19 @@ const ShopkeeperDashboard: React.FC = () => {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.greeting}>📊 {getShopDisplayName()}</Text>
-        <Text style={styles.subGreeting}>Manage your orders</Text>
+        <View style={styles.headerContent}>
+          <View>
+            <Text style={styles.greeting}>📊 {getShopDisplayName()}</Text>
+            <Text style={styles.subGreeting}>Manage your orders</Text>
+          </View>
+          {renderAddButton()}
+          <TouchableOpacity 
+            style={styles.addButton}
+            onPress={() => router.push('/detai')}
+          >
+            <Text style={styles.addButtonText}>Manage Orders</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       
       {/* Stats Cards */}
@@ -542,7 +631,7 @@ const ShopkeeperDashboard: React.FC = () => {
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
-          placeholder="Search orders, customers..."
+          placeholder="Search orders, customers, phone..."
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
@@ -600,27 +689,24 @@ const ShopkeeperDashboard: React.FC = () => {
                     <Text style={styles.detailText}>Customer: {selectedOrder.customerName}</Text>
                     <Text style={styles.detailText}>Email: {selectedOrder.userEmail}</Text>
                     {selectedOrder.customerPhone && (
-                      <Text style={styles.detailText}>Phone: {selectedOrder.customerPhone}</Text>
+                      <TouchableOpacity onPress={() => Alert.alert('Phone', selectedOrder.customerPhone)}>
+                        <Text style={[styles.detailText, styles.phoneLink]}>
+                          📞 Phone: {selectedOrder.customerPhone}
+                        </Text>
+                      </TouchableOpacity>
                     )}
                     <Text style={styles.detailText}>Payment: {selectedOrder.paymentMethod} ({selectedOrder.paymentStatus})</Text>
                   </View>
 
                   <View style={styles.orderDetailSection}>
                     <Text style={styles.sectionTitle}>Delivery Address</Text>
-                    {selectedOrder.deliveryAddress ? (
-                      <>
-                        <Text style={styles.detailText}>
-                          {selectedOrder.deliveryAddress.street}
-                        </Text>
-                        <Text style={styles.detailText}>
-                          {selectedOrder.deliveryAddress.city}, {selectedOrder.deliveryAddress.state}
-                        </Text>
-                        <Text style={styles.detailText}>
-                          Pincode: {selectedOrder.deliveryAddress.pincode}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={styles.detailText}>Delivery address not available</Text>
+                    <Text style={styles.detailText}>
+                      {formatDeliveryAddress(selectedOrder.deliveryAddress)}
+                    </Text>
+                    {selectedOrder.deliveryAddress?.pincode && (
+                      <Text style={styles.detailText}>
+                        📍 Pincode: {selectedOrder.deliveryAddress.pincode}
+                      </Text>
                     )}
                   </View>
 
@@ -726,6 +812,11 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     paddingHorizontal: 20,
   },
+  headerContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   greeting: {
     fontSize: 24,
     fontWeight: 'bold',
@@ -735,6 +826,19 @@ const styles = StyleSheet.create({
   subGreeting: {
     fontSize: 16,
     color: 'rgba(255, 255, 255, 0.8)',
+  },
+  addButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  addButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
   },
   statsContainer: {
     flexDirection: 'row',
@@ -746,11 +850,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     borderRadius: 10,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
+  
+  
+    shadowColor: '#000',  },
   statCard: {
     alignItems: 'center',
     flex: 1,
